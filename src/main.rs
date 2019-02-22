@@ -32,42 +32,51 @@ fn bench_random() {
             let mut zlib_sizes = Vec::new();
 
             println!("-- Random selections (up to {}%) --", part);
-            // nothing selected
-            let mut raw = bitvec![LittleEndian; 0u8; total_sectors];
 
-            // select some, randomly
-            let selected_sectors = rng.gen_range(1, total_sectors / part);
-            let sector_dist = Uniform::new(0, total_sectors);
-            let mut bm = Bitmap::create();
-            let mut con = Concise::new();
+            let mut selected_sectors_vec = Vec::new();
+            for _ in 0..10 {
+                // nothing selected
+                let mut raw = bitvec![LittleEndian; 0u8; total_sectors];
 
-            for _ in 0..selected_sectors {
-                let v = rng.sample(sector_dist);
-                raw.set(v, true);
-                bm.add(v as u32);
-                con.append(v as i32);
+                // select some, randomly
+                let selected_sectors = rng.gen_range(1, total_sectors / part);
+                selected_sectors_vec.push(selected_sectors);
+                let sector_dist = Uniform::new(0, total_sectors);
+                let mut bm = Bitmap::create();
+                let mut con = Concise::new();
+
+                for _ in 0..selected_sectors {
+                    let v = rng.sample(sector_dist);
+                    raw.set(v, true);
+                    bm.add(v as u32);
+                    con.append(v as i32);
+                }
+                let rle_enc = rle(&raw);
+
+                bm.run_optimize();
+
+                let mut gz = GzEncoder::new(Vec::new(), Compression::best());
+                gz.write_all(raw.as_ref()).unwrap();
+                let gz_enc = gz.finish().unwrap();
+                let mut zlib = ZlibEncoder::new(Vec::new(), Compression::best());
+                zlib.write_all(raw.as_ref()).unwrap();
+                let zlib_enc = zlib.finish().unwrap();
+
+                raw_sizes.push(raw.as_ref().len());
+                rle_sizes.push(rle_enc.as_ref().len());
+                roaring_sizes.push(bm.get_serialized_size_in_bytes());
+                con_sizes.push(con.size());
+                gz_sizes.push(gz_enc.len());
+                zlib_sizes.push(zlib_enc.len());
             }
-            let rle_enc = rle(&raw);
-
-            bm.run_optimize();
-
-            let mut gz = GzEncoder::new(Vec::new(), Compression::best());
-            gz.write_all(raw.as_ref()).unwrap();
-            let gz_enc = gz.finish().unwrap();
-            let mut zlib = ZlibEncoder::new(Vec::new(), Compression::best());
-            zlib.write_all(raw.as_ref()).unwrap();
-            let zlib_enc = zlib.finish().unwrap();
-
-            raw_sizes.push(raw.as_ref().len());
-            rle_sizes.push(rle_enc.as_ref().len());
-            roaring_sizes.push(bm.get_serialized_size_in_bytes());
-            con_sizes.push(con.size());
-            gz_sizes.push(gz_enc.len());
-            zlib_sizes.push(zlib_enc.len());
 
             let len = raw_sizes.len();
             // println!("random selection: ({} count)", len);
-            println!("sectors: {}/{}", selected_sectors, total_sectors);
+            println!(
+                "sectors: {}/{}",
+                average(&selected_sectors_vec),
+                total_sectors
+            );
             // println!("raw:     {} bytes", raw.len() / 8);
             // println!("rle:     {} bytes", rle_enc.len() / 8);
             // println!("roaring: {} bytes", bm.get_serialized_size_in_bytes());
@@ -104,40 +113,44 @@ fn bench_cont() {
                     "-- Multiple {} contigous selections (each up to {}%) --",
                     count, part
                 );
-                // nothing selected
-                let mut raw = bitvec![LittleEndian; 0u8; total_sectors];
-                let mut bm = Bitmap::create();
-                let mut con = Concise::new();
-                // select some, randomly, but contigous
-                let mut total_selected_sectors = 0;
-                for _ in 0..*count {
-                    let selected_sectors = rng.gen_range(1, total_sectors / part);
-                    total_selected_sectors += selected_sectors;
-                    let start = rng.gen_range(0, total_sectors - selected_sectors);
+                let mut total_selected_sectors_vec = Vec::new();
 
-                    for i in start..start + selected_sectors {
-                        raw.set(i, true);
-                        bm.add(i as u32);
-                        con.append(i as i32);
+                for _ in 0..10 {
+                    // nothing selected
+                    let mut raw = bitvec![LittleEndian; 0u8; total_sectors];
+                    let mut bm = Bitmap::create();
+                    let mut con = Concise::new();
+                    // select some, randomly, but contigous
+                    let mut total_selected_sectors = 0;
+                    for _ in 0..*count {
+                        let selected_sectors = rng.gen_range(1, total_sectors / part);
+                        total_selected_sectors += selected_sectors;
+                        let start = rng.gen_range(0, total_sectors - selected_sectors);
+
+                        for i in start..start + selected_sectors {
+                            raw.set(i, true);
+                            bm.add(i as u32);
+                            con.append(i as i32);
+                        }
                     }
+                    total_selected_sectors_vec.push(total_selected_sectors);
+                    let rle_enc = rle(&raw);
+
+                    bm.run_optimize();
+                    let mut gz = GzEncoder::new(Vec::new(), Compression::best());
+                    gz.write_all(raw.as_ref()).unwrap();
+                    let gz_enc = gz.finish().unwrap();
+                    let mut zlib = ZlibEncoder::new(Vec::new(), Compression::best());
+                    zlib.write_all(raw.as_ref()).unwrap();
+                    let zlib_enc = zlib.finish().unwrap();
+
+                    raw_sizes.push(raw.as_ref().len());
+                    rle_sizes.push(rle_enc.as_ref().len());
+                    roaring_sizes.push(bm.get_serialized_size_in_bytes());
+                    con_sizes.push(con.size());
+                    gz_sizes.push(gz_enc.len());
+                    zlib_sizes.push(zlib_enc.len());
                 }
-                let rle_enc = rle(&raw);
-
-                bm.run_optimize();
-                let mut gz = GzEncoder::new(Vec::new(), Compression::best());
-                gz.write_all(raw.as_ref()).unwrap();
-                let gz_enc = gz.finish().unwrap();
-                let mut zlib = ZlibEncoder::new(Vec::new(), Compression::best());
-                zlib.write_all(raw.as_ref()).unwrap();
-                let zlib_enc = zlib.finish().unwrap();
-
-                raw_sizes.push(raw.as_ref().len());
-                rle_sizes.push(rle_enc.as_ref().len());
-                roaring_sizes.push(bm.get_serialized_size_in_bytes());
-                con_sizes.push(con.size());
-                gz_sizes.push(gz_enc.len());
-                zlib_sizes.push(zlib_enc.len());
-
                 //
                 // println!("raw:     {} bytes", raw.len() / 8);
                 // println!("rle:     {} bytes", rle_enc.len() / 8);
@@ -148,7 +161,11 @@ fn bench_cont() {
 
                 let len = raw_sizes.len();
                 // println!("contingous slices: ({} count)", len);
-                println!("sectors: {}/{}", total_selected_sectors, total_sectors);
+                println!(
+                    "sectors: {}/{}",
+                    average(&total_selected_sectors_vec),
+                    total_sectors
+                );
                 println!("  raw:     {} bytes (avg)", average(&raw_sizes));
                 println!("  rle:     {} bytes (avg)", average(&rle_sizes));
                 println!("  roaring: {} bytes (avg)", average(&roaring_sizes),);
