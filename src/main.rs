@@ -22,16 +22,16 @@ fn bench_random() {
 
     // let sample_count = 100;
 
-    let mut raw_sizes = Vec::new();
-    let mut rle_sizes = Vec::new();
-    let mut roaring_sizes = Vec::new();
-    let mut con_sizes = Vec::new();
-    let mut gz_sizes = Vec::new();
-    let mut zlib_sizes = Vec::new();
+    for &total_sectors in &[10_000, 100_000, 1_000_000] {
+        for part in &[2, 5, 10] {
+            let mut raw_sizes = Vec::new();
+            let mut rle_sizes = Vec::new();
+            let mut roaring_sizes = Vec::new();
+            let mut con_sizes = Vec::new();
+            let mut gz_sizes = Vec::new();
+            let mut zlib_sizes = Vec::new();
 
-    for total_sectors in (1_000..1_000_000).step_by(10_000) {
-        for part in &[5, 10] {
-            // println!("-- Random selections (up to {}%) --", part);
+            println!("-- Random selections (up to {}%) --", part);
             // nothing selected
             let mut raw = bitvec![LittleEndian; 0u8; total_sectors];
 
@@ -65,25 +65,24 @@ fn bench_random() {
             gz_sizes.push(gz_enc.len());
             zlib_sizes.push(zlib_enc.len());
 
-            // println!("sectors: {}/{}", selected_sectors, total_sectors);
+            let len = raw_sizes.len();
+            // println!("random selection: ({} count)", len);
+            println!("sectors: {}/{}", selected_sectors, total_sectors);
             // println!("raw:     {} bytes", raw.len() / 8);
             // println!("rle:     {} bytes", rle_enc.len() / 8);
             // println!("roaring: {} bytes", bm.get_serialized_size_in_bytes());
             // println!("concise: {} bytes", con.size());
             // println!("gz:      {} bytes", gz_enc.len());
             // println!("zlib:    {} bytes", zlib_enc.len());
+
+            println!("  raw:     {} bytes (avg)", average(&raw_sizes));
+            println!("  rle:     {} bytes (avg)", average(&rle_sizes));
+            println!("  roaring: {} bytes (avg)", average(&roaring_sizes),);
+            println!("  concise: {} bytes (avg)", average(&con_sizes));
+            println!("  gz:      {} bytes (avg)", average(&gz_sizes));
+            println!("  zlib:    {} bytes (avg)", average(&zlib_sizes));
         }
     }
-
-    let len = raw_sizes.len();
-
-    println!("random selection: ({} count)", len);
-    println!("  raw:     {} bytes (avg)", average(&raw_sizes));
-    println!("  rle:     {} bytes (avg)", average(&rle_sizes));
-    println!("  roaring: {} bytes (avg)", average(&roaring_sizes),);
-    println!("  concise: {} bytes (avg)", average(&con_sizes));
-    println!("  gz:      {} bytes (avg)", average(&gz_sizes));
-    println!("  zlib:    {} bytes (avg)", average(&zlib_sizes));
 }
 
 fn bench_cont() {
@@ -91,69 +90,74 @@ fn bench_cont() {
 
     // let sample_count = 100;
 
-    let mut raw_sizes = Vec::new();
-    let mut rle_sizes = Vec::new();
-    let mut roaring_sizes = Vec::new();
-    let mut con_sizes = Vec::new();
-    let mut gz_sizes = Vec::new();
-    let mut zlib_sizes = Vec::new();
+    for &total_sectors in &[10_000, 100_000, 1_000_000] {
+        for count in &[2, 5, 10] {
+            for part in &[2, 5, 10] {
+                let mut raw_sizes = Vec::new();
+                let mut rle_sizes = Vec::new();
+                let mut roaring_sizes = Vec::new();
+                let mut con_sizes = Vec::new();
+                let mut gz_sizes = Vec::new();
+                let mut zlib_sizes = Vec::new();
 
-    for total_sectors in (1_000..1_000_000).step_by(10_000) {
-        for count in &[2, 5] {
-            // println!("-- Multiple contigous selections (each up to 3%) --");
-            // nothing selected
-            let mut raw = bitvec![LittleEndian; 0u8; total_sectors];
-            let mut bm = Bitmap::create();
-            let mut con = Concise::new();
-            // select some, randomly, but contigous
-            let mut total_selected_sectors = 0;
-            for _ in 0..*count {
-                let selected_sectors = rng.gen_range(1, total_sectors / 3);
-                total_selected_sectors += selected_sectors;
-                let start = rng.gen_range(0, total_sectors - selected_sectors);
+                println!(
+                    "-- Multiple {} contigous selections (each up to {}%) --",
+                    count, part
+                );
+                // nothing selected
+                let mut raw = bitvec![LittleEndian; 0u8; total_sectors];
+                let mut bm = Bitmap::create();
+                let mut con = Concise::new();
+                // select some, randomly, but contigous
+                let mut total_selected_sectors = 0;
+                for _ in 0..*count {
+                    let selected_sectors = rng.gen_range(1, total_sectors / part);
+                    total_selected_sectors += selected_sectors;
+                    let start = rng.gen_range(0, total_sectors - selected_sectors);
 
-                for i in start..start + selected_sectors {
-                    raw.set(i, true);
-                    bm.add(i as u32);
-                    con.append(i as i32);
+                    for i in start..start + selected_sectors {
+                        raw.set(i, true);
+                        bm.add(i as u32);
+                        con.append(i as i32);
+                    }
                 }
+                let rle_enc = rle(&raw);
+
+                bm.run_optimize();
+                let mut gz = GzEncoder::new(Vec::new(), Compression::best());
+                gz.write_all(raw.as_ref()).unwrap();
+                let gz_enc = gz.finish().unwrap();
+                let mut zlib = ZlibEncoder::new(Vec::new(), Compression::best());
+                zlib.write_all(raw.as_ref()).unwrap();
+                let zlib_enc = zlib.finish().unwrap();
+
+                raw_sizes.push(raw.as_ref().len());
+                rle_sizes.push(rle_enc.as_ref().len());
+                roaring_sizes.push(bm.get_serialized_size_in_bytes());
+                con_sizes.push(con.size());
+                gz_sizes.push(gz_enc.len());
+                zlib_sizes.push(zlib_enc.len());
+
+                //
+                // println!("raw:     {} bytes", raw.len() / 8);
+                // println!("rle:     {} bytes", rle_enc.len() / 8);
+                // println!("roaring: {} bytes", bm.get_serialized_size_in_bytes());
+                // println!("concise: {} bytes", con.size());
+                // println!("gz:      {} bytes", gz_enc.len());
+                // println!("zlib:    {} bytes", zlib_enc.len());
+
+                let len = raw_sizes.len();
+                // println!("contingous slices: ({} count)", len);
+                println!("sectors: {}/{}", total_selected_sectors, total_sectors);
+                println!("  raw:     {} bytes (avg)", average(&raw_sizes));
+                println!("  rle:     {} bytes (avg)", average(&rle_sizes));
+                println!("  roaring: {} bytes (avg)", average(&roaring_sizes),);
+                println!("  concise: {} bytes (avg)", average(&con_sizes));
+                println!("  gz:      {} bytes (avg)", average(&gz_sizes));
+                println!("  zlib:    {} bytes (avg)", average(&zlib_sizes));
             }
-            let rle_enc = rle(&raw);
-
-            bm.run_optimize();
-            let mut gz = GzEncoder::new(Vec::new(), Compression::best());
-            gz.write_all(raw.as_ref()).unwrap();
-            let gz_enc = gz.finish().unwrap();
-            let mut zlib = ZlibEncoder::new(Vec::new(), Compression::best());
-            zlib.write_all(raw.as_ref()).unwrap();
-            let zlib_enc = zlib.finish().unwrap();
-
-            raw_sizes.push(raw.as_ref().len());
-            rle_sizes.push(rle_enc.as_ref().len());
-            roaring_sizes.push(bm.get_serialized_size_in_bytes());
-            con_sizes.push(con.size());
-            gz_sizes.push(gz_enc.len());
-            zlib_sizes.push(zlib_enc.len());
-
-            // println!("sectors: {}/{}", total_selected_sectors, total_sectors);
-            // println!("raw:     {} bytes", raw.len() / 8);
-            // println!("rle:     {} bytes", rle_enc.len() / 8);
-            // println!("roaring: {} bytes", bm.get_serialized_size_in_bytes());
-            // println!("concise: {} bytes", con.size());
-            // println!("gz:      {} bytes", gz_enc.len());
-            // println!("zlib:    {} bytes", zlib_enc.len());
         }
     }
-
-    let len = raw_sizes.len();
-
-    println!("contingous slices: ({} count)", len);
-    println!("  raw:     {} bytes (avg)", average(&raw_sizes));
-    println!("  rle:     {} bytes (avg)", average(&rle_sizes));
-    println!("  roaring: {} bytes (avg)", average(&roaring_sizes),);
-    println!("  concise: {} bytes (avg)", average(&con_sizes));
-    println!("  gz:      {} bytes (avg)", average(&gz_sizes));
-    println!("  zlib:    {} bytes (avg)", average(&zlib_sizes));
 }
 
 fn average(numbers: &[usize]) -> f32 {
