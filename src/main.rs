@@ -26,6 +26,7 @@ fn bench_random() {
         for part in &[2, 5, 10] {
             let mut raw_sizes = Vec::new();
             let mut rle_sizes = Vec::new();
+            let mut rle_plus_sizes = Vec::new();
             let mut roaring_sizes = Vec::new();
             let mut con_sizes = Vec::new();
             let mut gz_sizes = Vec::new();
@@ -52,6 +53,7 @@ fn bench_random() {
                     con.append(v as i32);
                 }
                 let rle_enc = rle(&raw);
+                let rle_plus_enc = rle_plus(&raw);
 
                 bm.run_optimize();
 
@@ -64,6 +66,7 @@ fn bench_random() {
 
                 raw_sizes.push(raw.as_ref().len());
                 rle_sizes.push(rle_enc.as_ref().len());
+                rle_plus_sizes.push(rle_plus_enc.as_ref().len());
                 roaring_sizes.push(bm.get_serialized_size_in_bytes());
                 con_sizes.push(con.size());
                 gz_sizes.push(gz_enc.len());
@@ -86,6 +89,7 @@ fn bench_random() {
 
             println!("  raw:     {} bytes (avg)", average(&raw_sizes));
             println!("  rle:     {} bytes (avg)", average(&rle_sizes));
+            println!("  rle+:    {} bytes (avg)", average(&rle_plus_sizes));
             println!("  roaring: {} bytes (avg)", average(&roaring_sizes),);
             println!("  concise: {} bytes (avg)", average(&con_sizes));
             println!("  gz:      {} bytes (avg)", average(&gz_sizes));
@@ -104,6 +108,7 @@ fn bench_cont() {
             for part in &[2, 5, 10] {
                 let mut raw_sizes = Vec::new();
                 let mut rle_sizes = Vec::new();
+                let mut rle_plus_sizes = Vec::new();
                 let mut roaring_sizes = Vec::new();
                 let mut con_sizes = Vec::new();
                 let mut gz_sizes = Vec::new();
@@ -135,6 +140,7 @@ fn bench_cont() {
                     }
                     total_selected_sectors_vec.push(total_selected_sectors);
                     let rle_enc = rle(&raw);
+                    let rle_plus_enc = rle_plus(&raw);
 
                     bm.run_optimize();
                     let mut gz = GzEncoder::new(Vec::new(), Compression::best());
@@ -146,6 +152,7 @@ fn bench_cont() {
 
                     raw_sizes.push(raw.as_ref().len());
                     rle_sizes.push(rle_enc.as_ref().len());
+                    rle_plus_sizes.push(rle_plus_enc.as_ref().len());
                     roaring_sizes.push(bm.get_serialized_size_in_bytes());
                     con_sizes.push(con.size());
                     gz_sizes.push(gz_enc.len());
@@ -168,6 +175,7 @@ fn bench_cont() {
                 );
                 println!("  raw:     {} bytes (avg)", average(&raw_sizes));
                 println!("  rle:     {} bytes (avg)", average(&rle_sizes));
+                println!("  rle+:    {} bytes (avg)", average(&rle_plus_sizes));
                 println!("  roaring: {} bytes (avg)", average(&roaring_sizes),);
                 println!("  concise: {} bytes (avg)", average(&con_sizes));
                 println!("  gz:      {} bytes (avg)", average(&gz_sizes));
@@ -191,10 +199,60 @@ fn rle(raw: &BitVec<LittleEndian, u8>) -> BitVec<LittleEndian, u8> {
         if raw.get(i) != prev {
             let mut v = [0u8; 5];
             let s = unsigned_varint::encode::u32(count, &mut v);
+
             let s_vec: BitVec<LittleEndian, u8> = BitVec::from(s);
             encoding.extend(s_vec.iter());
             encoding.push(prev);
             count = 1;
+        } else {
+            count += 1;
+        }
+    }
+
+    encoding
+}
+
+fn rle_plus(raw: &BitVec<LittleEndian, u8>) -> BitVec<LittleEndian, u8> {
+    let mut encoding = BitVec::new();
+
+    // encode the very first bit
+    // the first block contains this, then alternating
+    encoding.push(raw.get(0));
+
+    // varint blocks
+    // - Typ0 - length 1                      : 1
+    // - Typ1 - length fits in a single varint: 01 - varint, fits in 4 bits
+    // - Typ2 - length is a regular varint    : 00 - varint
+    //
+    // Final encoding
+    //
+    // [ k, b0, b1, ..., bn]
+    // k = initial bit, determines the ordering of the actual values
+    // bi = varint blocks of Typ{0|1|2}
+
+    let mut count = 1;
+    let mut current = raw.get(0);
+    for i in 1..raw.len() {
+        if raw.get(i) != current {
+            if count == 1 {
+                // single bits are encoded as "1" bit
+                encoding.push(true);
+            } else {
+                let mut v = [0u8; 5];
+                let s = unsigned_varint::encode::u32(count, &mut v);
+                let s_vec: BitVec<LittleEndian, u8> = BitVec::from(s);
+
+                encoding.push(false);
+                if s.len() == 1 && s[0].leading_zeros() > 3 {
+                    encoding.push(true);
+                    encoding.extend(s_vec.iter().skip(4));
+                } else {
+                    encoding.push(false);
+                    encoding.extend(s_vec.iter());
+                }
+                count = 1;
+            }
+            current = raw.get(i);
         } else {
             count += 1;
         }
