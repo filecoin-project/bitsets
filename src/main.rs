@@ -1,9 +1,15 @@
 #![feature(wrapping_int_impl)]
 
+#[macro_use]
+extern crate prettytable;
+#[macro_use]
+extern crate lazy_static;
+
 use bitvec::*;
 use croaring::Bitmap;
 use flate2::write::{GzEncoder, ZlibEncoder};
 use flate2::Compression;
+use prettytable::{format, Table};
 use rand::distributions::Uniform;
 use rand::prelude::*;
 use std::io::prelude::*;
@@ -12,6 +18,18 @@ mod concise;
 
 use self::concise::Concise;
 
+lazy_static! {
+    static ref MARKDOWN_TABLE_FORMAT: format::TableFormat = format::FormatBuilder::new()
+        .column_separator('|')
+        .borders('|')
+        .separators(
+            &[format::LinePosition::Title],
+            format::LineSeparator::new('-', '|', '|', '|'),
+        )
+        .padding(1, 1)
+        .build();
+}
+
 fn main() {
     bench_random();
     bench_cont();
@@ -19,8 +37,6 @@ fn main() {
 
 fn bench_random() {
     let mut rng = rand::thread_rng();
-
-    // let sample_count = 100;
 
     for &total_sectors in &[10_000, 100_000, 1_000_000] {
         for part in &[2, 5, 10] {
@@ -31,8 +47,6 @@ fn bench_random() {
             let mut con_sizes = Vec::new();
             let mut gz_sizes = Vec::new();
             let mut zlib_sizes = Vec::new();
-
-            println!("-- Random selections (up to {}%) --", part);
 
             let mut selected_sectors_vec = Vec::new();
             for _ in 0..10 {
@@ -75,27 +89,32 @@ fn bench_random() {
                 zlib_sizes.push(zlib_enc.len());
             }
 
-            let len = raw_sizes.len();
-            // println!("random selection: ({} count)", len);
             println!(
-                "sectors: {}/{}",
+                "## Random selections (up to {}% - ({}/{}))",
+                part,
                 average(&selected_sectors_vec),
                 total_sectors
             );
-            // println!("raw:     {} bytes", raw.len() / 8);
-            // println!("rle:     {} bytes", rle_enc.len() / 8);
-            // println!("roaring: {} bytes", bm.get_serialized_size_in_bytes());
-            // println!("concise: {} bytes", con.size());
-            // println!("gz:      {} bytes", gz_enc.len());
-            // println!("zlib:    {} bytes", zlib_enc.len());
 
-            println!("  raw:     {} bytes (avg)", average(&raw_sizes));
-            println!("  rle:     {} bytes (avg)", average(&rle_sizes));
-            println!("  rle+:    {} bytes (avg)", average(&rle_plus_sizes));
-            println!("  roaring: {} bytes (avg)", average(&roaring_sizes),);
-            println!("  concise: {} bytes (avg)", average(&con_sizes));
-            println!("  gz:      {} bytes (avg)", average(&gz_sizes));
-            println!("  zlib:    {} bytes (avg)", average(&zlib_sizes));
+            let mut table = Table::new();
+            table.set_format(*MARKDOWN_TABLE_FORMAT);
+            table.set_titles(row!["variant", "size (in bytes)", "reduction"]);
+            table.add_row(row!["raw", r -> average(&raw_sizes), r -> diff(&raw_sizes, &raw_sizes)]);
+            table.add_row(row!["rle", r -> average(&rle_sizes), r -> diff(&raw_sizes, &rle_sizes)]);
+            table.add_row(
+                row!["rle+", r -> average(&rle_plus_sizes), r -> diff(&raw_sizes, &rle_plus_sizes)],
+            );
+            table.add_row(row!["roaring", r -> average(&roaring_sizes), r -> diff(&raw_sizes, &roaring_sizes)]);
+            table.add_row(
+                row!["concise", r -> average(&con_sizes), r -> diff(&raw_sizes, &con_sizes)],
+            );
+            table.add_row(row!["gz", r -> average(&gz_sizes), r -> diff(&raw_sizes, &gz_sizes)]);
+            table.add_row(
+                row!["zlib", r -> average(&zlib_sizes), r -> diff(&raw_sizes, &zlib_sizes)],
+            );
+
+            table.printstd();
+            println!("");
         }
     }
 }
@@ -116,10 +135,6 @@ fn bench_cont() {
                 let mut gz_sizes = Vec::new();
                 let mut zlib_sizes = Vec::new();
 
-                println!(
-                    "-- Multiple {} contigous selections (each up to {}%) --",
-                    count, part
-                );
                 let mut total_selected_sectors_vec = Vec::new();
 
                 for _ in 0..10 {
@@ -160,35 +175,55 @@ fn bench_cont() {
                     gz_sizes.push(gz_enc.len());
                     zlib_sizes.push(zlib_enc.len());
                 }
-                //
-                // println!("raw:     {} bytes", raw.len() / 8);
-                // println!("rle:     {} bytes", rle_enc.len() / 8);
-                // println!("roaring: {} bytes", bm.get_serialized_size_in_bytes());
-                // println!("concise: {} bytes", con.size());
-                // println!("gz:      {} bytes", gz_enc.len());
-                // println!("zlib:    {} bytes", zlib_enc.len());
 
-                let len = raw_sizes.len();
-                // println!("contingous slices: ({} count)", len);
                 println!(
-                    "sectors: {}/{}",
+                    "## Multiple {} contigous selections (each up to {}% - ({}/{}))",
+                    count,
+                    part,
                     average(&total_selected_sectors_vec),
                     total_sectors
                 );
-                println!("  raw:     {} bytes (avg)", average(&raw_sizes));
-                println!("  rle:     {} bytes (avg)", average(&rle_sizes));
-                println!("  rle+:    {} bytes (avg)", average(&rle_plus_sizes));
-                println!("  roaring: {} bytes (avg)", average(&roaring_sizes),);
-                println!("  concise: {} bytes (avg)", average(&con_sizes));
-                println!("  gz:      {} bytes (avg)", average(&gz_sizes));
-                println!("  zlib:    {} bytes (avg)", average(&zlib_sizes));
+
+                let mut table = Table::new();
+                table.set_format(*MARKDOWN_TABLE_FORMAT);
+                table.set_titles(row!["variant", "size (in bytes)", "reduction"]);
+                table.add_row(
+                    row!["raw", r -> average(&raw_sizes), r -> diff(&raw_sizes, &raw_sizes)],
+                );
+                table.add_row(
+                    row!["rle", r -> average(&rle_sizes), r -> diff(&raw_sizes, &rle_sizes)],
+                );
+                table.add_row(
+                row!["rle+", r -> average(&rle_plus_sizes), r -> diff(&raw_sizes, &rle_plus_sizes)],
+            );
+                table.add_row(row!["roaring", r -> average(&roaring_sizes), r -> diff(&raw_sizes, &roaring_sizes)]);
+                table.add_row(
+                    row!["concise", r -> average(&con_sizes), r -> diff(&raw_sizes, &con_sizes)],
+                );
+                table
+                    .add_row(row!["gz", r -> average(&gz_sizes), r -> diff(&raw_sizes, &gz_sizes)]);
+                table.add_row(
+                    row!["zlib", r -> average(&zlib_sizes), r -> diff(&raw_sizes, &zlib_sizes)],
+                );
+
+                table.printstd();
+                println!("");
             }
         }
     }
 }
 
-fn average(numbers: &[usize]) -> f32 {
-    numbers.iter().sum::<usize>() as f32 / numbers.len() as f32
+fn average(numbers: &[usize]) -> String {
+    let avg = numbers.iter().sum::<usize>() as f32 / numbers.len() as f32;
+    format!("{:.0}", avg)
+}
+
+fn diff(old: &[usize], new: &[usize]) -> String {
+    let old_avg = old.iter().sum::<usize>() as f32 / old.len() as f32;
+    let new_avg = new.iter().sum::<usize>() as f32 / new.len() as f32;
+
+    let diff_abs = new_avg - old_avg;
+    format!("{:.2}%", diff_abs / old_avg * 100.)
 }
 
 /// Simple run-length encoding.
