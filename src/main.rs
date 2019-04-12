@@ -40,7 +40,7 @@ fn bench_random() {
                 let mut raw = bitvec![LittleEndian; 0u8; total_sectors];
 
                 // select some, randomly
-                let selected_sectors = rng.gen_range(1, total_sectors / part);
+                let selected_sectors = rng.gen_range(1, (total_sectors / 100) * part);
                 selected_sectors_vec.push(selected_sectors);
                 let sector_dist = Uniform::new(0, total_sectors);
                 let mut bm = Bitmap::create();
@@ -52,6 +52,8 @@ fn bench_random() {
                     bm.add(v as u32);
                     con.append(v as i32);
                 }
+                assert!(raw.count_ones() <= selected_sectors);
+
                 let rle_enc = rle(&raw);
                 let rle_plus_enc = rle_plus(&raw);
 
@@ -64,9 +66,9 @@ fn bench_random() {
                 zlib.write_all(raw.as_ref()).unwrap();
                 let zlib_enc = zlib.finish().unwrap();
 
-                raw_sizes.push(raw.as_ref().len());
-                rle_sizes.push(rle_enc.as_ref().len());
-                rle_plus_sizes.push(rle_plus_enc.as_ref().len());
+                raw_sizes.push(raw.len() / 8);
+                rle_sizes.push(rle_enc.len() / 8);
+                rle_plus_sizes.push(rle_plus_enc.len() / 8);
                 roaring_sizes.push(bm.get_serialized_size_in_bytes());
                 con_sizes.push(con.size());
                 gz_sizes.push(gz_enc.len());
@@ -128,7 +130,7 @@ fn bench_cont() {
                     // select some, randomly, but contigous
                     let mut total_selected_sectors = 0;
                     for _ in 0..*count {
-                        let selected_sectors = rng.gen_range(1, total_sectors / part);
+                        let selected_sectors = rng.gen_range(1, (total_sectors / 100) * part);
                         total_selected_sectors += selected_sectors;
                         let start = rng.gen_range(0, total_sectors - selected_sectors);
 
@@ -150,9 +152,9 @@ fn bench_cont() {
                     zlib.write_all(raw.as_ref()).unwrap();
                     let zlib_enc = zlib.finish().unwrap();
 
-                    raw_sizes.push(raw.as_ref().len());
-                    rle_sizes.push(rle_enc.as_ref().len());
-                    rle_plus_sizes.push(rle_plus_enc.as_ref().len());
+                    raw_sizes.push(raw.len() / 8);
+                    rle_sizes.push(rle_enc.len() / 8);
+                    rle_plus_sizes.push(rle_plus_enc.len() / 8);
                     roaring_sizes.push(bm.get_serialized_size_in_bytes());
                     con_sizes.push(con.size());
                     gz_sizes.push(gz_enc.len());
@@ -194,15 +196,20 @@ fn rle(raw: &BitVec<LittleEndian, u8>) -> BitVec<LittleEndian, u8> {
     let mut encoding = BitVec::new();
 
     let mut count = 1;
+    let last = raw.len() - 1;
     for i in 1..raw.len() {
         let prev = raw.get(i - 1);
-        if raw.get(i) != prev {
+        if raw.get(i) != prev || i == last {
+            if i == last {
+                count += 1;
+            }
             let mut v = [0u8; 5];
             let s = unsigned_varint::encode::u32(count, &mut v);
 
             let s_vec: BitVec<LittleEndian, u8> = BitVec::from(s);
+            // println!("s_vec: {:?}, {}, ({})", &s_vec, s_vec.len(), count);
             encoding.extend(s_vec.iter());
-            encoding.push(prev);
+            encoding.push(prev.unwrap());
             count = 1;
         } else {
             count += 1;
@@ -217,7 +224,7 @@ fn rle_plus(raw: &BitVec<LittleEndian, u8>) -> BitVec<LittleEndian, u8> {
 
     // encode the very first bit
     // the first block contains this, then alternating
-    encoding.push(raw.get(0));
+    encoding.push(raw.get(0).unwrap());
 
     // varint blocks
     // - Typ0 - length 1                      : 1
@@ -259,4 +266,35 @@ fn rle_plus(raw: &BitVec<LittleEndian, u8>) -> BitVec<LittleEndian, u8> {
     }
 
     encoding
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rle_basics() {
+        let cases = vec![
+            (
+                bitvec![LittleEndian; 0; 8],
+                bitvec![LittleEndian;
+                        0, 0, 0, 1, 0, 0, 0, 0,
+                        0
+                ],
+            ),
+            (
+                bitvec![LittleEndian; 0, 0, 0, 0, 1, 0, 0, 0],
+                bitvec![LittleEndian;
+                        0, 0, 1, 0, 0, 0, 0, 0,
+                        0, 1, 0, 0, 0, 0, 0, 0,
+                        0, 1, 1, 1, 0, 0, 0, 0,
+                        0, 0, 0
+                ],
+            ),
+        ];
+
+        for case in cases.into_iter() {
+            assert_eq!(rle(&case.0), case.1);
+        }
+    }
 }

@@ -30,6 +30,7 @@ impl Concise {
         &self.words.as_ref().unwrap()[0..=self.last_word_index as usize]
     }
 
+    /// Size in bytes.
     pub fn size(&self) -> usize {
         (self.words_view().len() * 32) / 8
     }

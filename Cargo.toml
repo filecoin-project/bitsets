@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 rand = "0.6.5"
-bitvec = "0.9.0"
+bitvec = "0.10"
 unsigned-varint = "0.2.2"
 croaring = "0.3.8"
 flate2 = { version = "1.0", features = ["rust_backend"], default-features = false }
