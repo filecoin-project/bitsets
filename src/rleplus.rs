@@ -1,3 +1,59 @@
+//! # RLE+ Bitset Encoding
+//!
+//! RLE+ is a lossless compression format based on [RLE](https://en.wikipedia.org/wiki/Run-length_encoding).
+//! It's primary goal is to reduce the size in the case of many individual bits, where RLE breaks down quickly,
+//! while keeping the same level of compression for large sets of contigous bits.
+//!
+//! In tests it has shown to be more compact than RLE iteself, as well as [Concise](https://arxiv.org/pdf/1004.0403.pdf) and [Roaring](https://roaringbitmap.org/).
+//!
+//! ## Format
+//!
+//! The format consists of a header, followed by a series of blocks, of which there are three different types.
+//!
+//! The format can be expressed as the following [BNF](https://en.wikipedia.org/wiki/Backus%E2%80%93Naur_form) grammar.
+//!
+//! ```
+//!     <encoding> ::= <header> <blocks>
+//!       <header> ::= <bit>
+//!       <blocks> ::= <block_single> | <block_short> | <block_long>
+//! <block_single> ::= "1"
+//!  <block_short> ::= "01" <bit> <bit> <bit> <bit>
+//!   <block_long> ::= "00" <unsigned_varint>
+//!          <bit> ::= "0" | "1"
+//! ```
+//!
+//! An `<unsigned_varint>` is defined as specified [here](https://github.com/multiformats/unsigned-varint).
+//!
+//! ### Header
+//!
+//! The header indiciates the very first bit of the bit vector to encode. This means the first bit is always
+//! the same for the encoded and non encoded form.
+//!
+//! ### Blocks
+//!
+//! The blocks represent how many bits, of the current bit type there are. As `0` and `1` alternate in a bit vector
+//! the inital bit, which is stored in the header, is enough to determine if a length is currently referencing
+//! a set of `0`s, or `1`s.
+//!
+//! #### Block Single
+//!
+//! If the running length of the current bit is only `1`, it is encoded as a single set bit.
+//!
+//! #### Block Short
+//!
+//! If the running length is less than `16`, it can be encoded into up to four bits, which a short block
+//! represents. The length is encoded into a 4 bits, and prefixed with `01`, to indicate a short block.
+//!
+//! #### Block Long
+//!
+//! If the running length is `16` or larger, it is encoded into a varint, and then prefixed with `00` to indicate
+//! a long block.
+//!
+//!
+//! > **Note:** The encoding is unique, so no matter which algorithm for encoding is used, it should produce
+//! > the same encoding, given the same input.
+//!
+
 use bitvec::*;
 
 /// Encode the given bitset into their RLE+ encoded representation.
@@ -8,24 +64,18 @@ pub fn encode(raw: &BitVec<LittleEndian, u8>) -> BitVec<LittleEndian, u8> {
         return encoding;
     }
 
-    // encode the very first bit
-    // the first block contains this, then alternating
+    // Header
+    // encode the very first bit (the first block contains this, then alternating)
     encoding.push(raw.get(0).unwrap());
 
-    // varint blocks
-    // - Typ0 - length 1                      : 1
-    // - Typ1 - length fits in a single varint: 01 - varint, fits in 4 bits
-    // - Typ2 - length is a regular varint    : 00 - varint
-    //
-    // Final encoding
-    //
-    // [ k, b0, b1, ..., bn]
-    // k = initial bit, determines the ordering of the actual values
-    // bi = varint blocks of Typ{0|1|2}
-
+    // the running length
     let mut count = 1;
+
+    // the current bit type
     let mut current = raw.get(0);
+
     let last = raw.len();
+
     for i in 1..=raw.len() {
         if raw.get(i) != current || i == last {
             if i == last && raw.get(i) == current {
@@ -33,9 +83,10 @@ pub fn encode(raw: &BitVec<LittleEndian, u8>) -> BitVec<LittleEndian, u8> {
             }
 
             if count == 1 {
-                // single bits are encoded as "1" bit
+                // Block Single
                 encoding.push(true);
             } else if count < 16 {
+                // Block Short
                 // 4 bits
                 let s_vec: BitVec<LittleEndian, u8> = BitVec::from(&[count as u8][..]);
 
@@ -45,6 +96,7 @@ pub fn encode(raw: &BitVec<LittleEndian, u8>) -> BitVec<LittleEndian, u8> {
                 encoding.extend(s_vec.iter().take(4));
                 count = 1;
             } else {
+                // Block Long
                 let mut v = [0u8; 10];
                 let s = unsigned_varint::encode::u64(count, &mut v);
                 let s_vec: BitVec<LittleEndian, u8> = BitVec::from(s);
@@ -73,6 +125,7 @@ pub fn decode(enc: &BitVec<LittleEndian, u8>) -> BitVec<LittleEndian, u8> {
         return decoded;
     }
 
+    // Header
     // read the inital bit
     let mut cur = enc.get(0).unwrap();
 
@@ -87,8 +140,10 @@ pub fn decode(enc: &BitVec<LittleEndian, u8>) -> BitVec<LittleEndian, u8> {
             false => {
                 // multiple bits
                 match enc.get(i + 1) {
-                    // prefix: 00
                     Some(false) => {
+                        // Block Long
+                        // prefix: 00
+
                         let buf = enc
                             .iter()
                             .skip(i + 2)
@@ -105,8 +160,9 @@ pub fn decode(enc: &BitVec<LittleEndian, u8>) -> BitVec<LittleEndian, u8> {
                         // this is how much space the varint took in bits
                         i += (buf_ref.len() * 8) - (rest.len() * 8);
                     }
-                    // prefix: 01
                     Some(true) => {
+                        // Block Short
+                        // prefix: 01
                         let buf = enc
                             .iter()
                             .skip(i + 2)
@@ -129,7 +185,7 @@ pub fn decode(enc: &BitVec<LittleEndian, u8>) -> BitVec<LittleEndian, u8> {
                 }
             }
             true => {
-                // single bit
+                // Block Signle
                 decoded.push(cur);
                 i += 1;
             }
