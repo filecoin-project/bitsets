@@ -14,9 +14,8 @@ use rand::distributions::Uniform;
 use rand::prelude::*;
 use std::io::prelude::*;
 
-mod concise;
-
-use self::concise::Concise;
+use bitsets::concise::Concise;
+use bitsets::rleplus;
 
 lazy_static! {
     static ref MARKDOWN_TABLE_FORMAT: format::TableFormat = format::FormatBuilder::new()
@@ -69,7 +68,7 @@ fn bench_random() {
                 assert!(raw.count_ones() <= selected_sectors);
 
                 let rle_enc = rle(&raw);
-                let rle_plus_enc = rle_plus(&raw);
+                let rle_plus_enc = rleplus::encode(&raw);
 
                 bm.run_optimize();
 
@@ -157,7 +156,7 @@ fn bench_cont() {
                     }
                     total_selected_sectors_vec.push(total_selected_sectors);
                     let rle_enc = rle(&raw);
-                    let rle_plus_enc = rle_plus(&raw);
+                    let rle_plus_enc = rleplus::encode(&raw);
 
                     bm.run_optimize();
                     let mut gz = GzEncoder::new(Vec::new(), Compression::best());
@@ -254,64 +253,6 @@ fn rle(raw: &BitVec<LittleEndian, u8>) -> BitVec<LittleEndian, u8> {
     encoding
 }
 
-fn rle_plus(raw: &BitVec<LittleEndian, u8>) -> BitVec<LittleEndian, u8> {
-    let mut encoding = BitVec::new();
-
-    // encode the very first bit
-    // the first block contains this, then alternating
-    encoding.push(raw.get(0).unwrap());
-
-    // varint blocks
-    // - Typ0 - length 1                      : 1
-    // - Typ1 - length fits in a single varint: 01 - varint, fits in 4 bits
-    // - Typ2 - length is a regular varint    : 00 - varint
-    //
-    // Final encoding
-    //
-    // [ k, b0, b1, ..., bn]
-    // k = initial bit, determines the ordering of the actual values
-    // bi = varint blocks of Typ{0|1|2}
-
-    let mut count = 1;
-    let mut current = raw.get(0);
-    let last = raw.len() - 1;
-    for i in 1..raw.len() {
-        if raw.get(i) != current || i == last {
-            if i == last {
-                count += 1;
-            }
-            if count == 1 {
-                // single bits are encoded as "1" bit
-                encoding.push(true);
-            } else if count < 16 {
-                // 4 bits
-                let s_vec: BitVec<LittleEndian, u8> = BitVec::from(&[count as u8][..]);
-
-                // prefix: 01
-                encoding.push(false);
-                encoding.push(true);
-                encoding.extend(s_vec.iter().take(4));
-                count = 1;
-            } else {
-                let mut v = [0u8; 5];
-                let s = unsigned_varint::encode::u32(count, &mut v);
-                let s_vec: BitVec<LittleEndian, u8> = BitVec::from(s);
-
-                // prefix: 00
-                encoding.push(false);
-                encoding.push(false);
-                encoding.extend(s_vec.iter());
-                count = 1;
-            }
-            current = raw.get(i);
-        } else {
-            count += 1;
-        }
-    }
-
-    encoding
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,35 +280,6 @@ mod tests {
 
         for case in cases.into_iter() {
             assert_eq!(rle(&case.0), case.1);
-        }
-    }
-
-    #[test]
-    fn test_rle_plus_basics() {
-        let cases = vec![
-            (
-                bitvec![LittleEndian; 0; 8],
-                bitvec![LittleEndian;
-                        0, // starts with 0
-                        0, 1, // fits into 4 bits
-                        0, 0, 0, 1, // 8
-                ],
-            ),
-            (
-                bitvec![LittleEndian; 0, 0, 0, 0, 1, 0, 0, 0],
-                bitvec![LittleEndian;
-                        0, // starts with 0
-                        0, 1, // fits into 4 bits
-                        0, 0, 1, 0, // 4 - 0
-                        1, // 1 - 1
-                        0, 1, // fits into 4 bits
-                        1, 1, 0, 0 // 3 - 0
-                ],
-            ),
-        ];
-
-        for (i, case) in cases.into_iter().enumerate() {
-            assert_eq!(rle_plus(&case.0), case.1, "case: {}", i);
         }
     }
 }
